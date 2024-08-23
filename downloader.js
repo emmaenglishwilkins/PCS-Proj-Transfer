@@ -1,4 +1,4 @@
-// Filename: replit_project_downloader.js
+// TODO: download known repls 
 
 const { Builder, By, Key, until } = require('selenium-webdriver');
 const readline = require('readline');
@@ -43,7 +43,8 @@ function askQuestion(query) {
         }
 
         // Initialize Selenium WebDriver
-        const driver = await new Builder().forBrowser('chrome').build();
+        // const driver = await new Builder().forBrowser('chrome').build(); // this is for chrome aka my mac
+        const driver = await new Builder().forBrowser('edge').build(); // this is for microsoft edge aka my lenovo
 
         try {
             // Login to Replit
@@ -63,13 +64,21 @@ function askQuestion(query) {
 
             console.log(`\nFound ${replProjects.length} Repl projects. Starting download...\n`);
 
+            for (const [index, repl] of replProjects.entries()) { 
+                console.log(`Downloading (${index + 1}/${replProjects.length}): ${repl.name}`);
+                // Construct the URL using a template literal
+                const replUrl = `https://replit.com/@${username}/${repl.name}`;
+                // Call the download function
+                await downloadReplFiles(driver, replUrl, downloadPath, ['main.py']);
+            }
+            
             // // Download each Repl project as a zip file
             // for (const [index, repl] of replProjects.entries()) {
             //     console.log(`Downloading (${index + 1}/${replProjects.length}): ${repl.name}`);
             //     await downloadRepl(driver, repl.url, downloadPath);
             // }
 
-            // console.log('\nAll projects have been downloaded successfully!');
+            console.log('\nAll projects have been downloaded successfully!');
         } finally {
             // Quit the driver after operations
             await driver.quit();
@@ -163,30 +172,47 @@ async function getAllReplProjects(driver, username) {
 
 
 
+// const { By, until } = require('selenium-webdriver');
+// const path = require('path');
+
 /**
- * Downloads a single Repl project as a zip file.
+ * Downloads specified files from a Repl project as a zip file.
  * @param {WebDriver} driver
  * @param {string} replUrl
  * @param {string} downloadPath
+ * @param {Array<string>} filenames
  */
-async function downloadRepl(driver, replUrl, downloadPath) {
+async function downloadReplFiles(driver, replUrl, downloadPath, filenames) {
     // Navigate to the Repl's page
     await driver.get(replUrl);
 
-    // Wait until the page loads
+    // Wait until the page loads fully
     await driver.wait(until.elementLocated(By.css('button[aria-label="Download"]')), 15000);
 
-    // Click on the "Download" button
-    const downloadButton = await driver.findElement(By.css('button[aria-label="Download"]'));
-    await downloadButton.click();
+    for (const filename of filenames) {
+        try {
+            // Locate the file in the file explorer
+            const fileElement = await driver.findElement(By.xpath(`//span[text()='${filename}']`));
+            await fileElement.click();
 
-    // Wait for the download modal to appear and click "Download as Zip"
-    await driver.wait(until.elementLocated(By.xpath("//span[text()='Download as zip']")), 10000);
-    const downloadZipOption = await driver.findElement(By.xpath("//span[text()='Download as zip']"));
-    await downloadZipOption.click();
+            // Click on the "Download" button
+            const downloadButton = await driver.findElement(By.css('button[aria-label="Download"]'));
+            await downloadButton.click();
 
-    // Wait some time to ensure download starts (adjust as needed)
-    await driver.sleep(5000);
+            // Wait for the download modal to appear and click "Download as Zip"
+            await driver.wait(until.elementLocated(By.xpath("//span[text()='Download as zip']")), 10000);
+            const downloadZipOption = await driver.findElement(By.xpath("//span[text()='Download as zip']"));
+            await downloadZipOption.click();
 
-    console.log(`Downloaded: ${replUrl}`);
+            // Wait some time to ensure download starts (adjust as needed)
+            await driver.sleep(5000);
+
+            console.log(`Downloaded ${filename} from: ${replUrl}`);
+        } catch (error) {
+            console.log(`Failed to download ${filename} from: ${replUrl} - ${error.message}`);
+        }
+    }
+
+    console.log(`Completed downloads for Repl: ${replUrl}`);
 }
+
