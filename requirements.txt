@@ -1,0 +1,5 @@
+nmp init -y
+npm install seleium-webdriver
+npm install dotenv
+
+node downloader.js
