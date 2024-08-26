@@ -43,8 +43,8 @@ function askQuestion(query) {
         }
 
         // Initialize Selenium WebDriver
-        // const driver = await new Builder().forBrowser('chrome').build(); // this is for chrome aka my mac
-        const driver = await new Builder().forBrowser('edge').build(); // this is for microsoft edge aka my lenovo
+        const driver = await new Builder().forBrowser('chrome').build(); // this is for chrome aka my mac
+        // const driver = await new Builder().forBrowser('edge').build(); // this is for microsoft edge aka my lenovo
 
         try {
             // Login to Replit
@@ -58,8 +58,13 @@ function askQuestion(query) {
                 return;
             }
 
+            // removes underscores from replit names so that the corresponding web link is correct
             for (const [index, repl] of replProjects.entries()) {
                 console.log(`(${index + 1}) ${repl.name}`);
+                if (repl.name.includes("_")) { 
+                    repl.name = repl.name.replace(/_/g, "");
+                    console.log(repl.name); // Print the updated name
+                }
             }
 
             console.log(`\nFound ${replProjects.length} Repl projects. Starting download...\n`);
@@ -171,7 +176,6 @@ async function getAllReplProjects(driver, username) {
 }
 
 
-
 // const { By, until } = require('selenium-webdriver');
 // const path = require('path');
 
@@ -186,33 +190,45 @@ async function downloadReplFiles(driver, replUrl, downloadPath, filenames) {
     // Navigate to the Repl's page
     await driver.get(replUrl);
 
-    // Wait until the page loads fully
-    await driver.wait(until.elementLocated(By.css('button[aria-label="Download"]')), 15000);
+    // Wait for the page to load fully
+    await driver.wait(until.elementLocated(By.css('body')), 30000);
 
-    for (const filename of filenames) {
-        try {
-            // Locate the file in the file explorer
-            const fileElement = await driver.findElement(By.xpath(`//span[text()='${filename}']`));
-            await fileElement.click();
-
-            // Click on the "Download" button
-            const downloadButton = await driver.findElement(By.css('button[aria-label="Download"]'));
-            await downloadButton.click();
-
-            // Wait for the download modal to appear and click "Download as Zip"
-            await driver.wait(until.elementLocated(By.xpath("//span[text()='Download as zip']")), 10000);
-            const downloadZipOption = await driver.findElement(By.xpath("//span[text()='Download as zip']"));
-            await downloadZipOption.click();
-
-            // Wait some time to ensure download starts (adjust as needed)
-            await driver.sleep(5000);
-
-            console.log(`Downloaded ${filename} from: ${replUrl}`);
-        } catch (error) {
-            console.log(`Failed to download ${filename} from: ${replUrl} - ${error.message}`);
-        }
+    // Wait for and click the "..." button to reveal more options
+    try {
+        // Locate the "..." button using the class name
+        const moreOptionsButton = await driver.findElement(By.css('button.css-1drvipl'));
+        await moreOptionsButton.click();
+    } catch (error) {
+        console.error('Could not find the "More options" button:', error.message);
+        return;
     }
+
+    // Wait for the "Edit in Workspace" option to appear and click it
+    const editButton = await driver.wait(until.elementLocated(By.xpath("//span[text()='Edit in Workspace']")), 10000);
+    await editButton.click();
+
+    // Wait for the workspace to load fully
+    await driver.wait(until.elementLocated(By.css('body')), 30000);
+
+    // Click on the "..." button in the workspace
+    try {
+        // Locate the "..." button in the workspace using the same method
+        const workspaceMoreOptionsButton = await driver.findElement(By.css('button.css-1drvipl'));
+        await workspaceMoreOptionsButton.click();
+    } catch (error) {
+        console.error('Could not find the "More options" button in workspace:', error.message);
+        return;
+    }
+
+    // Wait for the "Download as Zip" option to appear and click it
+    const downloadZipOption = await driver.wait(until.elementLocated(By.xpath("//span[text()='Download as zip']")), 10000);
+    await downloadZipOption.click();
+
+    // Wait some time to ensure download starts (adjust as needed)
+    await driver.sleep(5000);
 
     console.log(`Completed downloads for Repl: ${replUrl}`);
 }
+
+
 
