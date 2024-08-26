@@ -1,9 +1,8 @@
-// TODO: download known repls 
-
 const { Builder, By, Key, until } = require('selenium-webdriver');
-const readline = require('readline');
+const chrome = require('selenium-webdriver/chrome');
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 
 // Configure readline interface for user input
 const rl = readline.createInterface({
@@ -20,8 +19,52 @@ function askQuestion(query) {
     });
 }
 
-// Main function to execute the script
-(async function main() {
+async function humanLikeDelay(min = 500, max = 1500) {
+    const delay = Math.floor(Math.random() * (max - min + 1) + min);
+    await new Promise(resolve => setTimeout(resolve, delay));
+}
+
+async function simulateHumanTyping(element, text) {
+    for (const char of text) {
+        await element.sendKeys(char);
+        await humanLikeDelay(50, 150);
+    }
+}
+
+async function retryingFind(driver, locator, timeout = 10000, retries = 3) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await driver.wait(until.elementLocated(locator), timeout);
+        } catch (error) {
+            if (i === retries - 1) throw error;
+            console.log(`Retrying to find element (${i + 1}/${retries})...`);
+            await driver.sleep(1000);
+        }
+    }
+}
+
+async function downloadReplFiles(driver, downloadPath, replName) {
+    try {
+        // Wait for and click the "..." button to reveal more options
+        const moreOptionsButton = await retryingFind(driver, By.css('button[aria-label="menu"]'));
+        await moreOptionsButton.click();
+
+        // Wait for the "Download as Zip" option to appear and click it
+        const downloadZipOption = await retryingFind(driver, By.xpath("//span[text()='Download as zip']"));
+        await downloadZipOption.click();
+
+        // Wait for the download to complete (adjust time as needed)
+        await driver.sleep(10000);
+
+        console.log(`Completed download for Repl: ${replName}`);
+    } catch (error) {
+        console.error(`An error occurred during the download process for ${replName}:`, error.message);
+    }
+}
+
+async function main() {
+    let driver;
+
     try {
         console.log('\n=== Replit Project Downloader ===\n');
 
@@ -42,193 +85,119 @@ function askQuestion(query) {
             console.log(`Created download directory at: ${downloadPath}`);
         }
 
-        // Initialize Selenium WebDriver
-        const driver = await new Builder().forBrowser('chrome').build(); // this is for chrome aka my mac
-        // const driver = await new Builder().forBrowser('edge').build(); // this is for microsoft edge aka my lenovo
+        // Set up Chrome options
+        const chromeOptions = new chrome.Options();
+        chromeOptions.addArguments('--disable-extensions');
+        chromeOptions.setUserPreferences({
+            'download.default_directory': downloadPath,
+            'download.prompt_for_download': false,
+            'download.directory_upgrade': true,
+            'safebrowsing.enabled': false
+        });
 
-        try {
-            // Login to Replit
-            await loginToReplit(driver, email, password);
+        // Initialize Selenium WebDriver with Chrome options
+        driver = await new Builder().forBrowser('chrome').setChromeOptions(chromeOptions).build();
 
-            // Retrieve all Repl project names and URLs
-            const replProjects = await getAllReplProjects(driver, username);
+        // Load Replit login page
+        await driver.get(`https://replit.com/login`);
+        await humanLikeDelay();
 
-            if (replProjects.length === 0) {
-                console.log('No Repl projects found for this user.');
-                return;
-            }
+        // Wait until login form is loaded
+        await driver.wait(until.elementLocated(By.css('input[name="username"]')), 10000);
 
-            // removes underscores from replit names so that the corresponding web link is correct
-            for (const [index, repl] of replProjects.entries()) {
-                console.log(`(${index + 1}) ${repl.name}`);
-                if (repl.name.includes("_")) { 
-                    repl.name = repl.name.replace(/_/g, "");
-                    console.log(repl.name); // Print the updated name
+        // Enter email with human-like typing
+        const emailField = await driver.findElement(By.css('input[name="username"]'));
+        await simulateHumanTyping(emailField, email);
+        await humanLikeDelay();
+
+        // Enter password with human-like typing
+        const passwordField = await driver.findElement(By.css('input[name="password"]'));
+        await simulateHumanTyping(passwordField, password);
+        await humanLikeDelay();
+
+        // Move mouse to login button and click
+        const loginButton = await driver.findElement(By.css('button[type="submit"]'));
+        const actions = driver.actions({async: true});
+        await actions.move({origin: loginButton}).pause(500).click().perform();
+
+        //  Wait for login to complete and dashboard to load
+        // await driver.wait(until.elementLocated(By.css('.dashboard-header')), 20000);
+
+        console.log('Successfully logged in!');
+        // Use browser navigation to go to the user's dashboard
+        // await driver.get('https://replit.com/~');
+
+        // Find and click the "See all Repls" link
+        const seeAllReplsLink = await driver.wait(until.elementLocated(By.xpath("//a[contains(@href, '/repls')]")), 20000);
+        await seeAllReplsLink.click();
+
+        // Wait for the repls container to load
+        await retryingFind(driver, By.css('.css-wijdl2'), 20000);
+
+        // Add a small delay to ensure all Repls are loaded
+        await driver.sleep(2000);
+
+        // Retrieve all Repl elements
+        let replElements = await driver.findElements(By.css('.css-ow5df0'));
+
+        console.log(`\nFound ${replElements.length} Repl projects. Starting download...\n`);
+
+        for (let index = 0; index < replElements.length; index++) {
+            let retries = 3;
+            
+            while (retries > 0) {
+                try {
+                    // Re-fetch the current Repl element
+                    replElements = await driver.findElements(By.css('.css-ow5df0'));
+                    const replElement = replElements[index];
+
+                    // Find the link within the Repl element
+                    const replLink = await replElement.findElement(By.css('a'));
+                    
+                    // Get the Repl name
+                    const replName = await replElement.findElement(By.css('.css-1jo2hvz')).getText();
+
+                    console.log(`Processing (${index + 1}/${replElements.length}): ${replName}`);
+
+                    // Store the current URL to return to later
+                    const replsPageUrl = await driver.getCurrentUrl();
+
+                    // Click the project link to navigate to the Repl page
+                    await replLink.click();
+
+                    // Wait for the Repl page to load
+                    await driver.wait(until.urlContains('/@'), 10000);
+
+                    // Perform the download action
+                    await downloadReplFiles(driver, downloadPath, replName);
+
+                    // Navigate back to the Repls page
+                    await driver.get(replsPageUrl);
+
+                    // Wait for the Repls page to load again
+                    await retryingFind(driver, By.css('.css-wijdl2'), 20000);
+
+                    break;  // If successful, break out of the retry loop
+                } catch (error) {
+                    console.error(`Error processing Repl (attempt ${4 - retries}/3):`, error.message);
+                    retries--;
+                    if (retries === 0) {
+                        console.error(`Failed to process Repl after 3 attempts. Moving to next Repl.`);
+                    } else {
+                        console.log(`Retrying...`);
+                        // Navigate back to the Repls page
+                        await driver.get('https://replit.com/repls');
+                        await retryingFind(driver, By.css('.css-wijdl2'), 20000);
+                    }
                 }
             }
-
-            console.log(`\nFound ${replProjects.length} Repl projects. Starting download...\n`);
-
-            for (const [index, repl] of replProjects.entries()) { 
-                console.log(`Downloading (${index + 1}/${replProjects.length}): ${repl.name}`);
-                // Construct the URL using a template literal
-                const replUrl = `https://replit.com/@${username}/${repl.name}`;
-                // Call the download function
-                await downloadReplFiles(driver, replUrl, downloadPath, ['main.py']);
-            }
-            
-            // // Download each Repl project as a zip file
-            // for (const [index, repl] of replProjects.entries()) {
-            //     console.log(`Downloading (${index + 1}/${replProjects.length}): ${repl.name}`);
-            //     await downloadRepl(driver, repl.url, downloadPath);
-            // }
-
-            console.log('\nAll projects have been downloaded successfully!');
-        } finally {
-            // Quit the driver after operations
-            await driver.quit();
-        }
-    } catch (error) {
-        console.error('An error occurred:', error);
-    }
-})();
-
-/**
- * Logs into Replit with provided credentials.
- * @param {WebDriver} driver
- * @param {string} email
- * @param {string} password
- */
-async function loginToReplit(driver, email, password) {
-    console.log('\nLogging into Replit...');
-
-    await driver.get('https://replit.com/login');
-
-    // Wait until login form is loaded
-    await driver.wait(until.elementLocated(By.css('input[name="username"]')), 10000);
-
-    // Enter email
-    const emailField = await driver.findElement(By.css('input[name="username"]'));
-    await emailField.sendKeys(email);
-
-    // Enter password
-    const passwordField = await driver.findElement(By.css('input[name="password"]'));
-    await passwordField.sendKeys(password);
-
-    // Click login button
-    const loginButton = await driver.findElement(By.css('button[type="submit"]'));
-    await loginButton.click();
-
-    console.log('Successfully logged in!');
-}
-
-// WORKING!!!! - this will need to be modified to choose the viewmore selector to get all repl projects
-
-/**
- * Retrieves all Repl projects for the specified user.
- * @param {WebDriver} driver
- * @param {string} username
- * @returns {Promise<Array<{name: string, url: string}>>}
- */
-async function getAllReplProjects(driver, username) {
-    console.log(`\nRetrieving Repl projects for user: ${username}`);
-
-    // Navigate to user's profile page
-    await driver.get(`https://replit.com/@${username}`);
-
-    // Wait until Repls are loaded
-    await driver.wait(until.elementLocated(By.css('.css-6og7tn li')), 10000);
-
-    const repls = new Set();
-    let lastHeight = await driver.executeScript('return document.body.scrollHeight');
-
-    while (true) {
-        // Get all Repl elements currently loaded
-        const replElements = await driver.findElements(By.css('.css-6og7tn li'));
-
-        for (const replElement of replElements) {
-            const nameElement = await replElement.findElement(By.css('.css-1t25kw8'));
-            const name = await nameElement.getText();
-
-            const linkElement = await replElement.findElement(By.css('a'));
-            const url = await linkElement.getAttribute('href');
-
-            repls.add(JSON.stringify({ name, url }));
         }
 
-        // Scroll to bottom to load more Repls
-        await driver.executeScript('window.scrollTo(0, document.body.scrollHeight);');
-        await driver.sleep(2000); // Wait for new Repls to load
-
-        const newHeight = await driver.executeScript('return document.body.scrollHeight');
-        if (newHeight === lastHeight) {
-            // No more new Repls loaded
-            break;
-        }
-        lastHeight = newHeight;
+        console.log('\nAll projects have been processed successfully!');
+    } finally {
+        // Quit the driver after operations
+        if (driver) await driver.quit();
     }
-
-    const replList = Array.from(repls).map((repl) => JSON.parse(repl));
-
-    console.log(`Found ${replList.length} Repl projects.`);
-
-    return replList;
 }
 
-
-// const { By, until } = require('selenium-webdriver');
-// const path = require('path');
-
-/**
- * Downloads specified files from a Repl project as a zip file.
- * @param {WebDriver} driver
- * @param {string} replUrl
- * @param {string} downloadPath
- * @param {Array<string>} filenames
- */
-async function downloadReplFiles(driver, replUrl, downloadPath, filenames) {
-    // Navigate to the Repl's page
-    await driver.get(replUrl);
-
-    // Wait for the page to load fully
-    await driver.wait(until.elementLocated(By.css('body')), 30000);
-
-    // Wait for and click the "..." button to reveal more options
-    try {
-        // Locate the "..." button using the class name
-        const moreOptionsButton = await driver.findElement(By.css('button.css-1drvipl'));
-        await moreOptionsButton.click();
-    } catch (error) {
-        console.error('Could not find the "More options" button:', error.message);
-        return;
-    }
-
-    // Wait for the "Edit in Workspace" option to appear and click it
-    const editButton = await driver.wait(until.elementLocated(By.xpath("//span[text()='Edit in Workspace']")), 10000);
-    await editButton.click();
-
-    // Wait for the workspace to load fully
-    await driver.wait(until.elementLocated(By.css('body')), 30000);
-
-    // Click on the "..." button in the workspace
-    try {
-        // Locate the "..." button in the workspace using the same method
-        const workspaceMoreOptionsButton = await driver.findElement(By.css('button.css-1drvipl'));
-        await workspaceMoreOptionsButton.click();
-    } catch (error) {
-        console.error('Could not find the "More options" button in workspace:', error.message);
-        return;
-    }
-
-    // Wait for the "Download as Zip" option to appear and click it
-    const downloadZipOption = await driver.wait(until.elementLocated(By.xpath("//span[text()='Download as zip']")), 10000);
-    await downloadZipOption.click();
-
-    // Wait some time to ensure download starts (adjust as needed)
-    await driver.sleep(5000);
-
-    console.log(`Completed downloads for Repl: ${replUrl}`);
-}
-
-
-
+main();
