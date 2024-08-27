@@ -137,8 +137,29 @@ async function main() {
         // Add a small delay to ensure all Repls are loaded
         await driver.sleep(2000);
 
+        // Scroll to the bottom of the page and wait for all Repl elements to load
+        await driver.executeScript("window.scrollTo(0, document.body.scrollHeight);");
+        await driver.sleep(2000); // Wait for new elements to load
+
+        // Function to get the current number of Repl elements
+        const getReplCount = async () => {
+            return await driver.findElements(By.css('.css-ow5df0')).then(elements => elements.length);
+        };
+
+        let previousCount = 0;
+        let currentCount = await getReplCount();
+
+        // Keep scrolling until no new elements are loaded
+        while (currentCount > previousCount) {
+            previousCount = currentCount;
+            await driver.executeScript("window.scrollTo(0, document.body.scrollHeight);");
+            await driver.sleep(2000); // Wait for new elements to load
+            currentCount = await getReplCount();
+        }
+
         // Retrieve all Repl elements
         let replElements = await driver.findElements(By.css('.css-ow5df0'));
+        console.log(`Total number of Repls found: ${replElements.length}`);
 
         console.log(`\nFound ${replElements.length} Repl projects. Starting download...\n`);
 
