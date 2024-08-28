@@ -10,6 +10,21 @@ const rl = readline.createInterface({
     output: process.stdout,
 });
 
+function findExistingFile(downloadPath, replName) {
+    const files = fs.readdirSync(downloadPath);
+    const normalizedReplName = replName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    
+    for (const file of files) {
+        if (file.endsWith('.zip')) {
+            const normalizedFileName = file.toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (normalizedFileName.includes(normalizedReplName)) {
+                return path.join(downloadPath, file);
+            }
+        }
+    }
+    return null;
+}
+
 // Utility function to ask questions via CLI
 function askQuestion(query) {
     return new Promise((resolve) => {
@@ -45,6 +60,23 @@ async function retryingFind(driver, locator, timeout = 10000, retries = 3) {
 
 async function downloadReplFiles(driver, downloadPath, replName) {
     try {
+        // Check if the sidebar is open
+        const sidebarOpen = await driver.executeScript(() => {
+            return document.querySelector('.css-7w41we') !== null;
+        });
+        
+        // If sidebar is not open, click the button to open it
+        if (!sidebarOpen) {
+            console.log("sidebarOpen: ", sidebarOpen, "opening sidebar");
+            const sidebarToggle = await retryingFind(driver, By.css('button[aria-label="Toggle sidebar"]'));
+            await sidebarToggle.click();
+            await driver.sleep(1000); // Wait for sidebar to open
+        }
+        const sidebarOpen2 = await driver.executeScript(() => {
+            return document.querySelector('.css-7w41we') !== null;
+        });
+        console.log("now sidebar is: ", sidebarOpen2);
+
         // Wait for and click the "..." button to reveal more options
         const moreOptionsButton = await retryingFind(driver, By.css('button[aria-label="menu"]'));
         await moreOptionsButton.click();
@@ -70,11 +102,11 @@ async function main() {
 
         // Collect user inputs
         const username = await askQuestion('Enter your Replit username: ');
-        const email = await askQuestion('Enter your Replit email: ');
+        const email = await askQuestion('Enter your Replit email/username: ');
         const password = await askQuestion('Enter your Replit password: ');
         const downloadDir = await askQuestion(
-            'Enter the directory where projects should be downloaded (default: ./replit_projects): '
-        ) || './replit_projects';
+            `Enter the directory where projects should be downloaded (default: ./${username}): `
+        ) || `./${username}`;
 
         rl.close();
 
@@ -120,12 +152,7 @@ async function main() {
         const actions = driver.actions({async: true});
         await actions.move({origin: loginButton}).pause(500).click().perform();
 
-        //  Wait for login to complete and dashboard to load
-        // await driver.wait(until.elementLocated(By.css('.dashboard-header')), 20000);
-
         console.log('Successfully logged in!');
-        // Use browser navigation to go to the user's dashboard
-        // await driver.get('https://replit.com/~');
 
         // Find and click the "See all Repls" link
         const seeAllReplsLink = await driver.wait(until.elementLocated(By.xpath("//a[contains(@href, '/repls')]")), 20000);
@@ -137,57 +164,45 @@ async function main() {
         // Add a small delay to ensure all Repls are loaded
         await driver.sleep(2000);
 
-        // Scroll to the bottom of the page and wait for all Repl elements to load
-        await driver.executeScript("window.scrollTo(0, document.body.scrollHeight);");
-        await driver.sleep(2000); // Wait for new elements to load
+        let lastProcessedIndex = 0;
 
-        // Function to get the current number of Repl elements
-        const getReplCount = async () => {
-            return await driver.findElements(By.css('.css-ow5df0')).then(elements => elements.length);
-        };
+        while (true) {
+            // Find all currently visible Repl elements
+            const replElements = await driver.findElements(By.css('.css-ow5df0'));
+            let allDownloaded = true; // Track if all Repls are downloaded
 
-        let previousCount = 0;
-        let currentCount = await getReplCount();
+            // Process all visible elements
+            for (let i = 0; i < replElements.length; i++) {
+                // Re-fetch the replElements to avoid stale element reference
+                const updatedReplElements = await driver.findElements(By.css('.css-ow5df0'));
+                const replElement = updatedReplElements[i];
 
-        // Keep scrolling until no new elements are loaded
-        while (currentCount > previousCount) {
-            previousCount = currentCount;
-            await driver.executeScript("window.scrollTo(0, document.body.scrollHeight);");
-            await driver.sleep(2000); // Wait for new elements to load
-            currentCount = await getReplCount();
-        }
+                // Check if the replElement is still valid
+                if (!replElement) {
+                    console.log(`Repl element at index ${i} is no longer valid.`);
+                    continue; // Skip to the next iteration if the element is not valid
+                }
 
-        // Retrieve all Repl elements
-        let replElements = await driver.findElements(By.css('.css-ow5df0'));
-        console.log(`Total number of Repls found: ${replElements.length}`);
+                const replName = await replElement.findElement(By.css('.css-1jo2hvz')).getText();
 
-        console.log(`\nFound ${replElements.length} Repl projects. Starting download...\n`);
+                console.log(`Processing (${i + 1}/${updatedReplElements.length}): ${replName}`);
 
-        for (let index = 0; index < replElements.length; index++) {
-            let retries = 3;
-            
-            while (retries > 0) {
+                const existingFile = findExistingFile(downloadPath, replName);
+
+                if (existingFile) {
+                    console.log(`Skipping download for ${replName}: File already exists (${existingFile})`);
+                    continue;
+                }
+
                 try {
-                    // Re-fetch the current Repl element
-                    replElements = await driver.findElements(By.css('.css-ow5df0'));
-                    const replElement = replElements[index];
-
-                    // Find the link within the Repl element
-                    const replLink = await replElement.findElement(By.css('a'));
-                    
-                    // Get the Repl name
-                    const replName = await replElement.findElement(By.css('.css-1jo2hvz')).getText();
-
-                    console.log(`Processing (${index + 1}/${replElements.length}): ${replName}`);
-
                     // Store the current URL to return to later
                     const replsPageUrl = await driver.getCurrentUrl();
 
                     // Click the project link to navigate to the Repl page
-                    await replLink.click();
+                    await replElement.findElement(By.css('a')).click();
 
                     // Wait for the Repl page to load
-                    await driver.wait(until.urlContains('/@'), 10000);
+                    await driver.wait(until.urlContains('/@'), 20000);
 
                     // Perform the download action
                     await downloadReplFiles(driver, downloadPath, replName);
@@ -197,20 +212,18 @@ async function main() {
 
                     // Wait for the Repls page to load again
                     await retryingFind(driver, By.css('.css-wijdl2'), 20000);
-
-                    break;  // If successful, break out of the retry loop
                 } catch (error) {
-                    console.error(`Error processing Repl (attempt ${4 - retries}/3):`, error.message);
-                    retries--;
-                    if (retries === 0) {
-                        console.error(`Failed to process Repl after 3 attempts. Moving to next Repl.`);
-                    } else {
-                        console.log(`Retrying...`);
-                        // Navigate back to the Repls page
-                        await driver.get('https://replit.com/repls');
-                        await retryingFind(driver, By.css('.css-wijdl2'), 20000);
-                    }
+                    console.error(`Error processing Repl ${replName}:`, error.message);
                 }
+            }
+
+            // If all Repls are downloaded, scroll to load more
+            if (allDownloaded) {
+                console.log('All visible Repls are downloaded, scrolling for more...');
+                await driver.executeScript("window.scrollTo(0, document.body.scrollHeight);");
+                await driver.sleep(2000); // Wait for new Repls to load
+            } else {
+                break; // Exit loop if not all are downloaded
             }
         }
 
